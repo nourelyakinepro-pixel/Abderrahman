@@ -1,0 +1,5 @@
+{
+  "name": "OrderFlow Manager",
+  "description": "Un système professionnel de gestion des commandes avec suivi des bénéfices en temps réel, gestion des emails clients et grille de données type Excel.",
+  "requestFramePermissions": []
+}
