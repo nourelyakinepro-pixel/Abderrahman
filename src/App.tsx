@@ -14,7 +14,9 @@ import {
   X,
   Users,
   ShoppingCart,
-  Edit2
+  Edit2,
+  LogOut,
+  Lock
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Toaster, toast } from 'sonner';
@@ -22,6 +24,9 @@ import CreatableSelect from 'react-select/creatable';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import { Order, OrderFormData, OrderStatus, Customer } from './types';
+import * as XLSX from 'xlsx';
+import jsPDF from 'jspdf';
+import autoTable from 'jspdf-autotable';
 
 function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -36,6 +41,9 @@ const formatCurrency = (amount: number) => {
 };
 
 export default function App() {
+  const [isAuthenticated, setIsAuthenticated] = useState(() => {
+    return localStorage.getItem('isAuthenticated') === 'true';
+  });
   const [view, setView] = useState<'orders' | 'customers'>('orders');
   const [orders, setOrders] = useState<Order[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
@@ -48,6 +56,7 @@ export default function App() {
   const [emailFilter, setEmailFilter] = useState<string | 'Tous'>('Tous');
   const [sortConfig, setSortConfig] = useState<{ key: string; direction: 'asc' | 'desc' } | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [isExportMenuOpen, setIsExportMenuOpen] = useState(false);
 
   useEffect(() => {
     loadData();
@@ -212,8 +221,8 @@ export default function App() {
   }, [customers, searchQuery]);
 
   const stats = useMemo(() => {
-    const totalSales = orders.reduce((acc, curr) => acc + (curr.prix_vente * curr.quantite), 0);
-    const totalProfit = orders.reduce((acc, curr) => acc + ((curr.prix_vente - curr.prix_achat) * curr.quantite), 0);
+    const totalSales = orders.reduce((acc, curr) => acc + curr.prix_vente, 0);
+    const totalProfit = orders.reduce((acc, curr) => acc + (curr.prix_vente - curr.prix_achat), 0);
     const deliveredCount = orders.filter(o => o.statut === 'Livrée').length;
     return { totalSales, totalProfit, deliveredCount };
   }, [orders]);
@@ -228,7 +237,7 @@ export default function App() {
       o.email_client,
       formatCurrency(o.prix_achat),
       formatCurrency(o.prix_vente),
-      formatCurrency((o.prix_vente - o.prix_achat) * o.quantite)
+      formatCurrency(o.prix_vente - o.prix_achat)
     ]);
 
     const csvContent = [headers, ...rows].map(e => e.join(",")).join("\n");
@@ -243,6 +252,49 @@ export default function App() {
     document.body.removeChild(link);
   };
 
+  const exportToExcel = () => {
+    const rows = filteredOrders.map(o => ({
+      'Numéro de commande': o.numero_commande,
+      'Produit': o.nom_produit,
+      'Statut': o.statut,
+      'Quantité': o.quantite,
+      'Email': o.email_client,
+      'Prix d\'achat': formatCurrency(o.prix_achat),
+      'Prix de vente': formatCurrency(o.prix_vente),
+      'Bénéfice': formatCurrency(o.prix_vente - o.prix_achat)
+    }));
+
+    const worksheet = XLSX.utils.json_to_sheet(rows);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, "Commandes");
+    XLSX.writeFile(workbook, "export_commandes.xlsx");
+  };
+
+  const exportToPDF = () => {
+    const doc = new jsPDF();
+    const headers = [['Numéro de commande', 'Produit', 'Statut', 'Quantité', 'Email', 'Prix d\'achat', 'Prix de vente', 'Bénéfice']];
+    const rows = filteredOrders.map(o => [
+      o.numero_commande,
+      o.nom_produit,
+      o.statut,
+      o.quantite.toString(),
+      o.email_client,
+      formatCurrency(o.prix_achat),
+      formatCurrency(o.prix_vente),
+      formatCurrency(o.prix_vente - o.prix_achat)
+    ]);
+
+    doc.text("Export des commandes", 14, 15);
+    autoTable(doc, {
+      head: headers,
+      body: rows,
+      startY: 20,
+      styles: { fontSize: 8 },
+      headStyles: { fillColor: [79, 70, 229] }
+    });
+    doc.save("export_commandes.pdf");
+  };
+
   const handleSort = (key: string) => {
     setSortConfig(prev => {
       if (prev?.key === key) {
@@ -251,6 +303,15 @@ export default function App() {
       return { key, direction: 'asc' };
     });
   };
+
+  const handleLogout = () => {
+    localStorage.removeItem('isAuthenticated');
+    setIsAuthenticated(false);
+  };
+
+  if (!isAuthenticated) {
+    return <Login onLogin={() => setIsAuthenticated(true)} />;
+  }
 
   return (
     <div className="min-h-screen bg-[#F8F9FA] text-[#1A1A1A] font-sans">
@@ -288,13 +349,22 @@ export default function App() {
               </button>
             </nav>
           </div>
-          <button 
-            onClick={() => view === 'orders' ? setIsModalOpen(true) : setIsCustomerModalOpen(true)}
-            className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg flex items-center gap-2 transition-all shadow-sm font-medium text-sm"
-          >
-            <Plus size={18} />
-            <span className="hidden sm:inline">{view === 'orders' ? 'Nouvelle commande' : 'Ajouter un email'}</span>
-          </button>
+          <div className="flex items-center gap-4">
+            <button 
+              onClick={() => view === 'orders' ? setIsModalOpen(true) : setIsCustomerModalOpen(true)}
+              className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg flex items-center gap-2 transition-all shadow-sm font-medium text-sm"
+            >
+              <Plus size={18} />
+              <span className="hidden sm:inline">{view === 'orders' ? 'Nouvelle commande' : 'Ajouter un email'}</span>
+            </button>
+            <button
+              onClick={handleLogout}
+              className="text-gray-500 hover:text-red-600 transition-colors p-2 rounded-lg hover:bg-red-50"
+              title="Déconnexion"
+            >
+              <LogOut size={20} />
+            </button>
+          </div>
         </div>
         {/* Mobile Nav */}
         <div className="md:hidden flex border-t border-gray-100">
@@ -379,13 +449,47 @@ export default function App() {
                       <option key={c.id} value={c.email}>{c.email}</option>
                     ))}
                   </select>
-                  <button 
-                    onClick={exportToCSV}
-                    className="flex items-center gap-2 px-4 py-2 border border-gray-200 rounded-lg hover:bg-gray-50 transition-all text-sm font-medium"
-                  >
-                    <Download size={16} />
-                    Exporter
-                  </button>
+                  <div className="relative">
+                    <button 
+                      onClick={() => setIsExportMenuOpen(!isExportMenuOpen)}
+                      onBlur={() => setTimeout(() => setIsExportMenuOpen(false), 200)}
+                      className="flex items-center gap-2 px-4 py-2 border border-gray-200 rounded-lg hover:bg-gray-50 transition-all text-sm font-medium"
+                    >
+                      <Download size={16} />
+                      Exporter
+                      <ChevronDown size={14} />
+                    </button>
+                    
+                    <AnimatePresence>
+                      {isExportMenuOpen && (
+                        <motion.div 
+                          initial={{ opacity: 0, y: 10 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          exit={{ opacity: 0, y: 10 }}
+                          className="absolute right-0 mt-2 w-48 bg-white rounded-lg shadow-lg border border-gray-100 py-1 z-50"
+                        >
+                          <button 
+                            onClick={() => { exportToCSV(); setIsExportMenuOpen(false); }}
+                            className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors"
+                          >
+                            Exporter en CSV
+                          </button>
+                          <button 
+                            onClick={() => { exportToExcel(); setIsExportMenuOpen(false); }}
+                            className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors"
+                          >
+                            Exporter en Excel
+                          </button>
+                          <button 
+                            onClick={() => { exportToPDF(); setIsExportMenuOpen(false); }}
+                            className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors"
+                          >
+                            Exporter en PDF
+                          </button>
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
+                  </div>
                 </div>
               </div>
             </div>
@@ -435,7 +539,7 @@ export default function App() {
                           </td>
                           <td className="px-6 py-4 text-sm text-gray-600">{order.quantite}</td>
                           <td className="px-6 py-4 text-sm font-semibold text-emerald-600">
-                            {formatCurrency((order.prix_vente - order.prix_achat) * order.quantite)}
+                            {formatCurrency(order.prix_vente - order.prix_achat)}
                           </td>
                           <td className="px-6 py-4 text-right">
                             <button 
@@ -561,6 +665,78 @@ export default function App() {
           />
         )}
       </AnimatePresence>
+    </div>
+  );
+}
+
+function Login({ onLogin }: { onLogin: () => void }) {
+  const [login, setLogin] = useState('');
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState('');
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (login === 'Admin' && password === '1234') {
+      localStorage.setItem('isAuthenticated', 'true');
+      onLogin();
+    } else {
+      setError('Identifiants incorrects');
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-[#F8F9FA] flex items-center justify-center p-4 font-sans">
+      <motion.div 
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        className="bg-white p-8 rounded-2xl shadow-xl w-full max-w-md border border-gray-100"
+      >
+        <div className="flex justify-center mb-6">
+          <div className="bg-indigo-100 p-4 rounded-full">
+            <Lock className="text-indigo-600 w-8 h-8" />
+          </div>
+        </div>
+        <h2 className="text-2xl font-bold text-center text-gray-900 mb-8">Connexion OrderFlow</h2>
+        
+        <form onSubmit={handleSubmit} className="space-y-5">
+          {error && (
+            <div className="bg-red-50 text-red-600 p-3 rounded-lg text-sm text-center font-medium">
+              {error}
+            </div>
+          )}
+          
+          <div className="space-y-1">
+            <label className="text-sm font-semibold text-gray-700">Identifiant</label>
+            <input 
+              type="text"
+              required
+              className="w-full px-4 py-2 bg-gray-50 border border-gray-200 rounded-lg focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none transition-all"
+              value={login}
+              onChange={(e) => setLogin(e.target.value)}
+              placeholder="Saisissez votre identifiant"
+            />
+          </div>
+          
+          <div className="space-y-1">
+            <label className="text-sm font-semibold text-gray-700">Mot de passe</label>
+            <input 
+              type="password"
+              required
+              className="w-full px-4 py-2 bg-gray-50 border border-gray-200 rounded-lg focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none transition-all"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="••••••••"
+            />
+          </div>
+          
+          <button 
+            type="submit"
+            className="w-full py-3 bg-indigo-600 text-white rounded-lg font-medium hover:bg-indigo-700 transition-all shadow-sm mt-4"
+          >
+            Se connecter
+          </button>
+        </form>
+      </motion.div>
     </div>
   );
 }
@@ -750,7 +926,7 @@ function AddOrderModal({ onClose, onSubmit, customers }: {
               />
             </div>
             <div className="space-y-1">
-              <label className="text-xs font-semibold text-gray-500 uppercase">Prix d'achat (DH)</label>
+              <label className="text-xs font-semibold text-gray-500 uppercase">Prix d'achat total (DH)</label>
               <input 
                 type="number"
                 step="0.01"
@@ -764,7 +940,7 @@ function AddOrderModal({ onClose, onSubmit, customers }: {
               />
             </div>
             <div className="space-y-1">
-              <label className="text-xs font-semibold text-gray-500 uppercase">Prix de vente (DH)</label>
+              <label className="text-xs font-semibold text-gray-500 uppercase">Prix de vente total (DH)</label>
               <input 
                 type="number"
                 step="0.01"
